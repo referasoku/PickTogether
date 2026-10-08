@@ -1,6 +1,8 @@
 :root {
   --bg-color: #f0e7df;
   --text-color: #121211;
+  --border-color: #121211;
+  --card-bg: #121211;
 }
 
 /* Base Body Styles */
