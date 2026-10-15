@@ -404,3 +404,8 @@ function goHome() {
     document.getElementById('room-key-display').style.display = 'none';
     window.history.replaceState({}, document.title, window.location.pathname);
 }
+// used for error messages
+setInterval(() => {
+document.getElementById("message").textContent = 
+  JSON.stringify(state, null, 2);
+}, 100);
