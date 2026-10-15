@@ -84,11 +84,26 @@
                             <div id="poll-tabs-container" class="poll-tabs"></div>
                             <button id="add-poll-btn" class="btn btn-primary host-only" style="display:none; margin-bottom: 1.5rem;" onclick="promptCreatePoll()">+ New Poll</button>
                         </div>
-                        
                         <!-- Active Poll Card -->
                         <div class="card" id="active-poll-card">
                             <h3 id="poll-title-heading">Loading Poll... <span id="poll-status-badge" class="badge open">Open</span></h3>
-
+                            <!-- Host Settings for Current Poll -->
+                            <div id="poll-settings-box" class="host-only" style="display:none; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 15px;">
+                                <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                                    <div class="setting-group" style="flex:1;">
+                                        <label>Result Visibility:</label>
+                                        <select id="result-visibility-select" onchange="updatePollSettings()">
+                                            <option value="live">Show Live Results</option>
+                                            <option value="hidden">Hide Until Closed</option>
+                                        </select>
+                                    </div>
+                                    <div class="setting-group" style="flex:1;">
+                                        <label>Deadline Timer:</label>
+                                        <input type="time" id="poll-deadline-input" onchange="updatePollSettings()">
+                                    </div>
+                                </div>
+                                <button class="btn btn-danger" style="font-size: 0.85rem;" onclick="closeCurrentPoll()"><i class="fa-solid fa-lock"></i> Close Voting</button>
+                            </div>
                         </div>
                     </div>
                 </div>
