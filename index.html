@@ -79,7 +79,17 @@
                     </div>
                       <!-- Right Column: Poll Tabs & Voting Area -->
                     <div class="room-content-area">
-                      
+                        <!-- Poll Tabs -->
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div id="poll-tabs-container" class="poll-tabs"></div>
+                            <button id="add-poll-btn" class="btn btn-primary host-only" style="display:none; margin-bottom: 1.5rem;" onclick="promptCreatePoll()">+ New Poll</button>
+                        </div>
+                        
+                        <!-- Active Poll Card -->
+                        <div class="card" id="active-poll-card">
+                            <h3 id="poll-title-heading">Loading Poll... <span id="poll-status-badge" class="badge open">Open</span></h3>
+
+                        </div>
                     </div>
                 </div>
             </section>
