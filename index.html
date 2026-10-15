@@ -12,7 +12,33 @@
         <title>PickTogether</title>
     </head>
     <body>
-        <p>Test text.</p>
-        <script src=""></script>
+        <header>
+        <!-- Top Navigation Bar -->
+        <nav class="navbar">
+            <div class="nav-left">
+                <div id="room-key-display" class="room-key-badge"style="display: none;">
+                    <i class="fa-solid fa-key"></i> Room Key: <span id="key-value">------</span>
+                    <button class="btn btn-secondary" style="padding: 2px 6px; font-size: 0.75rem; margin-left: 5px;" onclick="copyInviteLink()">Copy Link</button>
+                </div>
+                <a href="#" class="navbar-brand" onclick="event.preventDefault(); goHome();">
+                    <i class="fa-solid fa-people-group"></i> PickTogether
+                </a>
+            </div>
+            <ul class="nav-links">
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="event.preventDefault(); goHome();"><i class="fa-solid fa-house"></i> Home</a>
+                </li>
+                <li class="nav-item" id="dropdown-rooms">
+                    <button class="nav-link dropdown-toggle" onclick="toggleDropdown('dropdown-rooms')">
+                        <i class="fa-solid fa-user-group"></i> Rooms <i class="fa-solid fa-chevron-down"></i>
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a href="#" class="dropdown-item" onclick="event.preventDefault(); createRoom();"><i class="fa-solid fa-plus"></i> Create Room</a></li>
+                        <li><a href="#" class="dropdown-item" onclick="event.preventDefault(); promptJoinRoom();"><i class="fa-solid fa-right-to-bracket"></i> Join Room</a></li>
+                    </ul>
+                </li>
+            </ul>
+        </nav>
+        </header>
     </body>
 </html>
