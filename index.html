@@ -52,8 +52,22 @@
                 </div>
             </div>
         </div>
-        <main>
+        <main class="main-container">
+                      <!-- VIEW 1: Home / Landing Screen -->
+            <section id="home-view" class="view-section active">
+                <div class="hero-card">
+                    <h1>Make Group Decisions Together</h1>
+                    <p>Create a room to manage multiple polls, vote, and decide in real time.</p>
+                    <div class="hero-actions">
+                        <button class="btn btn-primary" onclick="createRoom()"><i class="fa-solid fa-plus-circle"></i> Create Room</button>
+                        <button class="btn btn-secondary" onclick="promptJoinRoom()"><i class="fa-solid fa-right-to-bracket"></i> Join Room</button>
+                    </div>
+                </div>
+            </section>
+            <!-- VIEW 2: Active Room Screen -->
+            <section id="room-view" class="view-section">
 
+            </section>
         </main>
     </body>
 </html>
