@@ -1,434 +1,435 @@
-const SUPABASE_URL = 'https://mkxbpxehgzcrimjyuomu.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1reGJweGVoZ3pjcmltanl1b211Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwNzg5MDksImV4cCI6MjEwNzY1NDkwOX0.JDt7raDr9XkcyIgQ5KIa0sX-xohW8Q0uxL9A0bMcCUQ';
+// PickTogether — Supabase-backed rooms and real-time voting.
+// Install supabase_setup.sql and enable Authentication > Anonymous Sign-Ins first.
+// The publishable/anon key belongs in browser code; NEVER put a service_role/secret key here.
+const SUPABASE_URL = 'https://hsfuypbcwbiyczzrfdlo.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_LZFLW3gSwjckCZxRAQ08Vg_Rh7Xl0y0';
+const db = window.supabase?.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) ?? null;
+const SESSION_KEY = 'picktogether:test:last-room';
 
-let supabaseClient = null;
-try {
-    if (SUPABASE_URL && SUPABASE_URL !== 'https://mkxbpxehgzcrimjyuomu.supabase.co' && window.supabase) {
-        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    }
-} catch (err) {
-    console.warn("Supabase initialization skipped. Running in local state mode.", err);
-}
-
-let state = {
-    roomKey: null,
-    username: null,
-    isHost: false,
-    participants: [],
-    polls: [],
-    activePollId: null,
-    options: {},
-    votes: {},
-    subscriptions: []
-};
-
+let state = freshState();
 let modalResolve = null;
+let refreshPromise = null;
+let refreshQueued = false;
+let refreshTimer = null;
+let pollTimer = null;
 
-function showCustomPrompt(title, description, defaultValue = "") {
-    return new Promise((resolve) => {
-        closeAllDropdowns();
-        modalResolve = resolve;
-        document.getElementById('modal-title').innerText = title;
-        document.getElementById('modal-desc').innerText = description;
-        const inputEl = document.getElementById('modal-input');
-        inputEl.value = defaultValue;
-        
-        document.getElementById('custom-modal').classList.add('active');
-        setTimeout(() => inputEl.focus(), 100);
-
-        inputEl.onkeydown = (e) => {
-            if (e.key === 'Enter') closeModal(true);
-        };
-    });
+function freshState() {
+    return { roomKey: null, userId: null, username: null, isHost: false,
+        participants: [], polls: [], activePollId: null, options: [], myVote: null,
+        counts: {}, subscriptions: [] };
 }
 
-function closeModal(isSubmitted) {
-    const inputEl = document.getElementById('modal-input');
-    const val = inputEl.value;
-    document.getElementById('custom-modal').classList.remove('active');
-    if (modalResolve) {
-        modalResolve(isSubmitted ? val : null);
-        modalResolve = null;
-    }
+function el(id) { return document.getElementById(id); }
+function assertOK(response, action) {
+    if (response.error) throw new Error(`${action}: ${response.error.message}`);
+    return response.data;
 }
-
-function generateKey() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+function message(error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    console.error(raw);
+    let detail = raw;
+    if (/duplicate key|unique constraint|23505/i.test(raw))
+        detail = /room|create/i.test(raw) ? 'This room code or name is already used. Please try again.'
+            : 'That name or option is already in use.';
+    if (/row-level security|permission denied|42501/i.test(raw))
+        detail = 'Supabase blocked this action. Check that supabase_setup.sql ran and Anonymous Sign-Ins are enabled.';
+    const box = el('message');
+    if (box) { box.textContent = detail; box.hidden = false; }
+    else alert(detail);
 }
+function clearMessage() { if (el('message')) el('message').hidden = true; }
+function friendlyError(error) { message(error); }
 
-function toggleDropdown(id) {
-    const el = document.getElementById(id);
-    const isOpen = el.classList.contains('active');
-    closeAllDropdowns();
-    if (!isOpen) el.classList.add('active');
+async function ensureIdentity() {
+    if (!db) throw new Error('Supabase did not load. Check internet access and the Supabase script in index.html.');
+    const session = assertOK(await db.auth.getSession(), 'Checking login').session;
+    if (session?.user?.id) return session.user.id;
+    const { data, error } = await db.auth.signInAnonymously();
+    if (error) throw new Error('Guest login failed. Enable Anonymous Sign-Ins in Supabase Authentication settings. ' + error.message);
+    return data.user.id;
 }
 
 function closeAllDropdowns() {
-    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
 }
-
-window.addEventListener('click', e => { 
-    if (!e.target.closest('.nav-item')) {
+function toggleDropdown(id) {
+    const item = el(id), opening = !item.classList.contains('active');
+    closeAllDropdowns();
+    if (opening) item.classList.add('active');
+}
+function showCustomPrompt(title, description, defaultValue = '') {
+    return new Promise(resolve => {
         closeAllDropdowns();
-    }
-});
-
-window.addEventListener('DOMContentLoaded', async () => {
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
-    if (roomParam) {
-        let uname = await showCustomPrompt("Join Room", `Enter your username to join room ${roomParam}:`, "Participant");
-        if (uname && uname.trim()) joinRoom(roomParam, uname.trim());
-    }
-});
+        // Resolve a prior prompt if a second action was triggered before the first finished.
+        if (modalResolve) modalResolve(null);
+        modalResolve = resolve;
+        el('modal-title').textContent = title;
+        el('modal-desc').textContent = description;
+        const input = el('modal-input');
+        input.value = defaultValue;
+        el('custom-modal').classList.add('active');
+        input.onkeydown = e => { if (e.key === 'Enter') closeModal(true); };
+        input.focus();
+    });
+}
+function closeModal(submitted) {
+    const value = el('modal-input').value.trim();
+    el('custom-modal').classList.remove('active');
+    if (modalResolve) { modalResolve(submitted ? value : null); modalResolve = null; }
+}
+function makeRoomCode() {
+    const numbers = new Uint32Array(1);
+    crypto.getRandomValues(numbers);
+    return String(100000 + (numbers[0] % 900000));
+}
+function rememberRoom() {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ key: state.roomKey, name: state.username }));
+    const url = new URL(location.href);
+    url.searchParams.set('room', state.roomKey);
+    history.replaceState({}, '', url);
+}
 
 async function createRoom() {
-    closeAllDropdowns();
-    let uname = await showCustomPrompt("Create Room", "Enter your username to act as the host:", "HostUser");
-    if (!uname || !uname.trim()) return;
-    let key = generateKey();
-
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('rooms').insert([{ room_key: key }]);
-            await supabaseClient.from('participants').insert([{ room_key: key, name: uname.trim(), role: 'Host' }]);
-            await supabaseClient.from('polls').insert([{ room_key: key, title: 'Main Poll', status: 'open' }]);
-        } catch (e) {
-            console.error("Supabase write error, using local fallback:", e);
+    closeAllDropdowns(); clearMessage();
+    const name = await showCustomPrompt('Create Room', 'Enter your display name as the host:', 'HostUser');
+    if (!name) return;
+    try {
+        const userId = await ensureIdentity();
+        let created;
+        for (let tries = 0; tries < 5; tries++) {
+            const key = makeRoomCode();
+            const result = await db.rpc('pt_create_room', { p_room_key: key, p_name: name });
+            if (!result.error) { created = result.data[0]; break; }
+            if (result.error.code !== '23505') throw result.error;
         }
-    }
-
-    state.roomKey = key; 
-    state.username = uname.trim(); 
-    state.isHost = true;
-    state.participants = [{ name: uname.trim(), role: 'Host' }];
-    state.polls = [{ id: 1, title: 'Main Poll', status: 'open', result_visibility: 'live' }];
-    state.activePollId = 1;
-    state.options = [];
-    state.votes = [];
-
-    enterRoom(key);
+        if (!created) throw new Error('Could not generate a unique room code. Try again.');
+        clearSubscriptions();
+        state = freshState();
+        state.userId = userId; state.username = name;
+        state.roomKey = created.room_key; state.activePollId = created.poll_id;
+        await enterRoom();
+    } catch (err) { friendlyError(err); }
 }
-
 async function promptJoinRoom() {
-    closeAllDropdowns();
-    let key = await showCustomPrompt("Join Room", "Enter the 6-digit Room Key:");
-    if (!key || key.trim().length !== 6) {
-        if (key !== null) alert("Please enter a valid 6-digit key.");
-        return;
-    }
-    let uname = await showCustomPrompt("Join Room", `Enter your display name to join room ${key.trim()}:`, "Participant");
-    if (!uname || !uname.trim()) return;
-    
-    joinRoom(key.trim(), uname.trim());
+    closeAllDropdowns(); clearMessage();
+    const key = await showCustomPrompt('Join Room', 'Enter the six-digit room code:');
+    if (key === null) return;
+    if (!/^\d{6}$/.test(key)) { message('Please enter a valid six-digit code.'); return; }
+    const name = await showCustomPrompt('Join Room', `Enter your name to join room ${key}:`, 'Participant');
+    if (!name) return;
+    await joinRoom(key, name);
 }
-
-async function joinRoom(key, uname) {
-    state.roomKey = key;
-    state.username = uname;
-    state.isHost = false;
-
-    if (supabaseClient) {
-        try {
-            let { data: parts } = await supabaseClient.from('participants').select('*').eq('room_key', key);
-            if (parts && parts.length > 0) {
-                await supabaseClient.from('participants').upsert([{ room_key: key, name: uname, role: 'Participant' }], { onConflict: 'room_key,name' });
-            }
-        } catch (e) {
-            console.warn("Supabase join error:", e);
-        }
-    }
-
-    state.participants = [{ name: 'HostUser', role: 'Host' }, { name: uname, role: 'Participant' }];
-    state.polls = [{ id: 1, title: 'Main Poll', status: 'open', result_visibility: 'live' }];
-    state.activePollId = 1;
-
-    enterRoom(key);
+async function joinRoom(key, name) {
+    clearMessage();
+    if (!/^\d{6}$/.test(key) || !name.trim()) { message('Enter a valid room code and display name.'); return; }
+    try {
+        const userId = await ensureIdentity();
+        const joined = assertOK(await db.rpc('pt_join_room', {
+            p_room_key: key, p_name: name.trim()
+        }), 'Joining room');
+        if (!joined?.length) throw new Error('Could not join room.');
+        clearSubscriptions();
+        state = freshState();
+        state.userId = userId; state.username = name.trim(); state.roomKey = key;
+        state.isHost = joined[0].role === 'Host';
+        await enterRoom();
+    } catch (err) { friendlyError(err); }
 }
-
-async function enterRoom(key) {
-    document.getElementById('home-view').classList.remove('active');
-    document.getElementById('room-view').classList.add('active');
-    document.getElementById('room-key-display').style.display = 'inline-flex';
-    document.getElementById('key-value').innerText = key;
-
-    document.querySelectorAll('.host-only').forEach(el => el.style.display = state.isHost ? 'inline-block' : 'none');
-
-    if (supabaseClient) {
-        await fetchRoomData();
-        setupRealtime(key);
-    } else {
-        renderMembers();
-        renderPollTabs();
-        renderOptionsAndResults(state.polls[0]);
-    }
+async function enterRoom() {
+    clearSubscriptions();
+    el('home-view').classList.remove('active');
+    el('room-view').classList.add('active');
+    el('room-key-display').style.display = 'inline-flex';
+    el('key-value').textContent = state.roomKey;
+    rememberRoom();
+    try { await refreshRoom(); }
+    catch (err) { friendlyError(err); goHome(false); return; }
+    subscribeToRoom(state.roomKey);
+    // Backup refresh if browser/Realtime connection is interrupted.
+    pollTimer = setInterval(() => { if (state.roomKey) queueRefresh(); }, 20000);
 }
 
 async function fetchRoomData() {
-    if (!supabaseClient) return;
-    try {
-        let { data: pData } = await supabaseClient.from('participants').select('*').eq('room_key', state.roomKey);
-        if (pData && pData.length > 0) state.participants = pData;
-        
-        let { data: pollData } = await supabaseClient.from('polls').select('*').eq('room_key', state.roomKey);
-        if (pollData && pollData.length > 0) {
-            state.polls = pollData;
-            if (!state.activePollId) state.activePollId = state.polls[0].id;
-        }
-    } catch (e) {
-        console.warn("Fetch error:", e);
+    const key = state.roomKey;
+    if (!key) return;
+    const [membersResponse, pollsResponse] = await Promise.all([
+        db.from('pt_participants').select('id,room_key,user_id,name,role').eq('room_key', key).order('created_at'),
+        db.from('pt_polls').select('*').eq('room_key', key).order('created_at')
+    ]);
+    const members = assertOK(membersResponse, 'Loading members');
+    const polls = assertOK(pollsResponse, 'Loading polls');
+    if (key !== state.roomKey) return;
+    const self = members.find(p => p.user_id === state.userId);
+    if (!self) {
+        goHome();
+        message('You are no longer a member of this room.');
+        return;
     }
-
-    renderMembers();
-    renderPollTabs();
+    state.participants = members;
+    state.isHost = self.role === 'Host';
+    state.username = self.name;
+    state.polls = polls;
+    if (!polls.some(p => p.id === state.activePollId)) state.activePollId = polls[0]?.id ?? null;
+    renderMembers(); renderPollTabs(); renderHostControls();
     await fetchActivePollDetails();
 }
-
 async function fetchActivePollDetails() {
-    if (!supabaseClient || !state.activePollId) return;
-    let poll = state.polls.find(p => p.id === state.activePollId);
-    if (!poll) return;
-
-    document.getElementById('poll-title-heading').innerHTML = `${poll.title} <span class="badge ${poll.status}">${poll.status.toUpperCase()}</span>`;
-    document.getElementById('result-visibility-select').value = poll.result_visibility || 'live';
-    document.getElementById('poll-deadline-input').value = poll.deadline ? poll.deadline.slice(0, 16) : '';
-
-    try {
-        let { data: optData } = await supabaseClient.from('options').select('*').eq('poll_id', state.activePollId);
-        state.options = optData || [];
-
-        let { data: voteData } = await supabaseClient.from('votes').select('*').eq('poll_id', state.activePollId);
-        state.votes = voteData || [];
-    } catch (e) {
-        console.warn("Poll details fetch error:", e);
+    const pollId = state.activePollId;
+    const poll = state.polls.find(p => p.id === pollId);
+    if (!poll) {
+        state.options = []; state.myVote = null; state.counts = {};
+        el('poll-title-heading').textContent = 'No polls yet';
+        el('options-list').replaceChildren();
+        el('outcome-box').textContent = 'The host can create a poll.';
+        return;
     }
-
+    const [optionResponse, myVoteResponse, countResponse] = await Promise.all([
+        db.from('pt_options').select('*').eq('poll_id', pollId).order('created_at'),
+        db.from('pt_votes').select('option_id').eq('poll_id', pollId).eq('voter_id', state.userId).maybeSingle(),
+        db.rpc('pt_vote_totals', { p_poll_id: pollId })
+    ]);
+    const options = assertOK(optionResponse, 'Loading options');
+    const myVote = assertOK(myVoteResponse, 'Loading your vote');
+    const totals = assertOK(countResponse, 'Loading results');
+    if (pollId !== state.activePollId || !state.roomKey) return;
+    state.options = options;
+    state.myVote = myVote;
+    state.counts = Object.fromEntries(totals.map(r => [r.option_id, Number(r.vote_count)]));
     renderOptionsAndResults(poll);
 }
-
-function setupRealtime(key) {
-    if (!supabaseClient) return;
-    state.subscriptions.forEach(sub => supabaseClient.removeChannel(sub));
-    state.subscriptions = [];
-
-    let channel = supabaseClient.channel(`room-live-${key}`)
-        .on('postgres_changes', { event: '*', schema: 'public', filter: `room_key=eq.${key}` }, () => fetchRoomData())
-        .subscribe();
+function queueRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => { refreshTimer = null; refreshRoom().catch(friendlyError); }, 125);
+}
+async function refreshRoom() {
+    if (refreshPromise) { refreshQueued = true; return refreshPromise; }
+    refreshPromise = (async () => {
+        do {
+            refreshQueued = false;
+            if (state.roomKey) await fetchRoomData();
+        } while (refreshQueued && state.roomKey);
+    })();
+    try { await refreshPromise; }
+    finally { refreshPromise = null; }
+}
+function subscribeToRoom(key) {
+    if (!db) return;
+    const channel = db.channel(`pt-room-${key}-${state.userId}`);
+    for (const table of ['pt_participants', 'pt_polls', 'pt_options', 'pt_votes']) {
+        channel.on('postgres_changes', {
+            event: '*', schema: 'public', table, filter: `room_key=eq.${key}`
+        }, () => { if (state.roomKey === key) queueRefresh(); });
+    }
+    channel.subscribe(status => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')
+            console.warn('Realtime disconnected; periodic refresh will continue.', status);
+        if (status === 'SUBSCRIBED') queueRefresh();
+    });
     state.subscriptions.push(channel);
 }
+function clearSubscriptions() {
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (db) state.subscriptions.forEach(ch => db.removeChannel(ch));
+    state.subscriptions = [];
+}
 
+function appendText(parent, tag, text, className = '') {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (className) node.className = className;
+    parent.appendChild(node);
+    return node;
+}
+function renderHostControls() {
+    el('add-poll-btn').style.display = state.isHost ? 'inline-block' : 'none';
+    el('poll-settings-box').style.display = state.isHost ? 'block' : 'none';
+}
 function renderMembers() {
-    const tbody = document.getElementById('user-table-body');
-    tbody.innerHTML = '';
-    state.participants.forEach(p => {
-        let tr = document.createElement('tr');
-        let nameDisplay = p.role === 'Host' ? `[Host] ${p.name}` : p.name;
-        let kickBtn = (state.isHost && p.name !== state.username) ? `<button class="btn btn-danger" style="padding:2px 6px; font-size:0.75rem;" onclick="kickUser('${p.name}')">Kick</button>` : '';
-        tr.innerHTML = `<td>${nameDisplay}</td><td><span class="badge ${p.role.toLowerCase()}">${p.role}</span></td><td>${kickBtn}</td>`;
-        tbody.appendChild(tr);
-    });
-}
-
-function renderPollTabs() {
-    const container = document.getElementById('poll-tabs-container');
-    container.innerHTML = '';
-    state.polls.forEach(poll => {
-        let btn = document.createElement('button');
-        btn.className = `poll-tab ${poll.id === state.activePollId ? 'active' : ''}`;
-        btn.innerText = poll.title;
-        btn.onclick = () => { 
-            state.activePollId = poll.id; 
-            if (supabaseClient) fetchActivePollDetails();
-            else renderOptionsAndResults(poll);
-        };
-        container.appendChild(btn);
-    });
-}
-
-function renderOptionsAndResults(poll) {
-    const list = document.getElementById('options-list');
-    list.innerHTML = '';
-
-    let counts = {};
-    state.options.forEach(o => counts[o.id] = 0);
-    state.votes.forEach(v => { if (counts[v.option_id] !== undefined) counts[v.option_id]++; });
-
-    let userVote = state.votes.find(v => v.voter_name === state.username);
-
-    state.options.forEach(opt => {
-        let isVoted = userVote && userVote.option_id === opt.id;
-        let li = document.createElement('li');
-        li.className = `option-item ${isVoted ? 'voted' : ''}`;
-        
-        let showCount = (poll.result_visibility === 'live' || poll.status === 'closed');
-        let countBadge = showCount ? `<strong>(${counts[opt.id] || 0} votes)</strong>` : '';
-
-        li.innerHTML = `
-            <span>${opt.text} ${countBadge}</span>
-            <div>
-                <small style="margin-right:10px;">By: ${opt.addedBy}</small>
-                ${poll.status === 'open' ? `<button class="btn ${isVoted ? 'btn-secondary' : 'btn-primary'}" style="padding:4px 8px; font-size:0.8rem;" onclick="castVote(${opt.id})">${isVoted ? 'Change Vote' : 'Vote'}</button>` : ''}
-            </div>
-        `;
-        list.appendChild(li);
-    });
-
-    let outcomeBox = document.getElementById('outcome-box');
-    if (poll.status === 'closed') {
-        let maxVotes = -1;
-        let winningOptions = [];
-        Object.keys(counts).forEach(id => {
-            if (counts[id] > maxVotes) { maxVotes = counts[id]; winningOptions = [id]; }
-            else if (counts[id] === maxVotes) { winningOptions.push(id); }
-        });
-        let winnerTexts = state.options.filter(o => winningOptions.includes(o.id.toString())).map(o => o.text);
-        
-        if (winningOptions.length === 0 || maxVotes === 0) {
-            outcomeBox.innerText = "Voting Closed: No votes were cast.";
-        } else if (winningOptions.length > 1) {
-            outcomeBox.innerText = `Tie Outcome: ${winnerTexts.join(', ')} (${maxVotes} votes each)`;
-        } else {
-            outcomeBox.innerText = `Decision Winner: 🎉 ${winnerTexts[0]} (${maxVotes} votes)`;
+    const tbody = el('user-table-body'); tbody.replaceChildren();
+    state.participants.forEach(member => {
+        const row = document.createElement('tr');
+        appendText(row, 'td', member.name);
+        const roleCell = document.createElement('td');
+        appendText(roleCell, 'span', member.role, `badge ${member.role.toLowerCase()}`);
+        row.appendChild(roleCell);
+        const action = document.createElement('td');
+        if (state.isHost && member.user_id !== state.userId) {
+            const kick = appendText(action, 'button', 'Kick', 'btn btn-danger');
+            kick.style.padding = '2px 6px';
+            kick.onclick = () => kickUser(member.user_id);
         }
+        row.appendChild(action); tbody.appendChild(row);
+    });
+}
+function renderPollTabs() {
+    const container = el('poll-tabs-container'); container.replaceChildren();
+    state.polls.forEach(poll => {
+        const button = appendText(container, 'button', poll.title,
+            `poll-tab ${poll.id === state.activePollId ? 'active' : ''}`);
+        button.onclick = () => {
+            state.activePollId = poll.id;
+            renderPollTabs();
+            fetchActivePollDetails().catch(friendlyError);
+        };
+    });
+}
+function isPollClosed(poll) {
+    return poll.status === 'closed' || (poll.deadline && new Date(poll.deadline) <= new Date());
+}
+function localDateTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso), pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function renderOptionsAndResults(poll) {
+    const closed = isPollClosed(poll);
+    const title = el('poll-title-heading'); title.replaceChildren();
+    appendText(title, 'span', poll.title);
+    appendText(title, 'span', closed ? 'CLOSED' : 'OPEN', `badge ${closed ? 'closed' : 'open'}`);
+    el('result-visibility-select').value = poll.result_visibility || 'live';
+    el('poll-deadline-input').value = localDateTime(poll.deadline);
+    const optionInput = el('new-option-input');
+    optionInput.disabled = closed;
+    el('add-option-btn').disabled = closed;
+    el('close-poll-btn').disabled = closed;
+    const showCounts = poll.result_visibility === 'live' || closed;
+    const list = el('options-list'); list.replaceChildren();
+    for (const option of state.options) {
+        const item = document.createElement('li');
+        item.className = `option-item ${state.myVote?.option_id === option.id ? 'voted' : ''}`;
+        const main = document.createElement('span');
+        appendText(main, 'span', option.text);
+        if (showCounts) appendText(main, 'strong', ` (${state.counts[option.id] ?? 0} votes)`);
+        item.appendChild(main);
+        const right = document.createElement('div');
+        const owner = state.participants.find(p => p.user_id === option.added_by)?.name ?? 'Former member';
+        const small = appendText(right, 'small', `By: ${owner}`);
+        small.style.marginRight = '10px';
+        if (!closed) {
+            const picked = state.myVote?.option_id === option.id;
+            const button = appendText(right, 'button', picked ? 'Your Vote' : 'Vote',
+                `btn ${picked ? 'btn-secondary' : 'btn-primary'}`);
+            button.disabled = picked;
+            button.onclick = () => castVote(option.id);
+        }
+        item.appendChild(right); list.appendChild(item);
+    }
+    const outcome = el('outcome-box');
+    if (!closed) {
+        outcome.textContent = showCounts ? 'Poll open. You can change your vote while voting is open.'
+            : 'Results are hidden until voting closes.';
     } else {
-        outcomeBox.innerText = poll.result_visibility === 'hidden' ? "Results are hidden until the host closes the poll." : "Poll is open. Cast or update your vote anytime!";
+        const best = Math.max(0, ...state.options.map(opt => state.counts[opt.id] ?? 0));
+        const winning = state.options.filter(opt => (state.counts[opt.id] ?? 0) === best);
+        if (best === 0) outcome.textContent = 'Voting closed: No votes were cast.';
+        else if (winning.length > 1) outcome.textContent = `Tie: ${winning.map(o => o.text).join(', ')} (${best} votes each)`;
+        else outcome.textContent = `Winner: 🎉 ${winning[0].text} (${best} votes)`;
     }
 }
 
 async function addOption() {
-    let input = document.getElementById('new-option-input');
-    let val = input.value.trim();
-    if (!val) return;
-
-    // Safety check: ensure optionsMap and votesMap always exist
-    if (!state.optionsMap) state.optionsMap = {};
-    if (!state.optionsMap[state.activePollId]) {
-        state.optionsMap[state.activePollId] = [];
+    clearMessage();
+    const input = el('new-option-input');
+    const value = input.value.trim();
+    const poll = state.polls.find(p => p.id === state.activePollId);
+    if (!value || !poll || isPollClosed(poll)) return;
+    if (state.options.some(o => o.text.toLocaleLowerCase() === value.toLocaleLowerCase())) {
+        message('That option already exists.'); return;
     }
-
-    let newOptId = Date.now();
-    state.optionsMap[state.activePollId].push({ 
-        id: newOptId, 
-        poll_id: state.activePollId, 
-        text: val, 
-        added_by: state.username 
-    });
-
-    if (supabaseClient) {
-        try {
-            const { error } = await supabaseClient
-                .from('options')
-                .insert([{ poll_id: state.activePollId, text: val, added_by: state.username }]);
-                
-            if (error) {
-                console.error("Error inserting option:", error.message);
-            } else {
-                await fetchRoomData();
-            }
-        } catch(e) { 
-            console.error("Supabase exception:", e); 
-        }
-    } else {
-        renderActivePoll();
-    }
-    
-    input.value = '';
+    try {
+        assertOK(await db.from('pt_options').insert({
+            room_key: state.roomKey, poll_id: poll.id, text: value, added_by: state.userId
+        }), 'Adding option');
+        input.value = '';
+        await refreshRoom();
+    } catch (err) { friendlyError(err); }
 }
-
 async function castVote(optionId) {
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('votes').upsert([{ poll_id: state.activePollId, option_id: optionId, voter_name: state.username }], { onConflict: 'poll_id,voter_name' });
-            fetchActivePollDetails();
-        } catch (e) { console.error(e); }
-    } else {
-        state.votes = state.votes.filter(v => v.voter_name !== state.username);
-        state.votes.push({ poll_id: state.activePollId, option_id: optionId, voter_name: state.username });
-        renderOptionsAndResults(state.polls.find(p => p.id === state.activePollId));
-    }
+    clearMessage();
+    const poll = state.polls.find(p => p.id === state.activePollId);
+    if (!poll || isPollClosed(poll)) return;
+    try {
+        assertOK(await db.from('pt_votes').upsert({
+            room_key: state.roomKey, poll_id: poll.id, option_id: optionId, voter_id: state.userId
+        }, { onConflict: 'poll_id,voter_id' }), 'Voting');
+        await refreshRoom();
+    } catch (err) { friendlyError(err); }
 }
-
 async function promptCreatePoll() {
-    let title = await showCustomPrompt("New Poll", "Enter new poll topic / question:", "Where should we eat?");
-    if (!title || !title.trim()) return;
-
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('polls').insert([{ room_key: state.roomKey, title: title.trim(), status: 'open' }]);
-            fetchRoomData();
-        } catch (e) { console.error(e); }
-    } else {
-        let newPoll = { id: Date.now(), title: title.trim(), status: 'open', result_visibility: 'live' };
-        state.polls.push(newPoll);
-        state.activePollId = newPoll.id;
-        renderPollTabs();
-        renderOptionsAndResults(newPoll);
-    }
+    if (!state.isHost) return;
+    clearMessage();
+    const title = await showCustomPrompt('New Poll', 'Enter a question or topic:', 'Where should we eat?');
+    if (!title) return;
+    try {
+        const added = assertOK(await db.from('pt_polls')
+            .insert({ room_key: state.roomKey, title, status: 'open' }).select('id').single(), 'Creating poll');
+        state.activePollId = added.id;
+        await refreshRoom();
+    } catch (err) { friendlyError(err); }
 }
-
 async function updatePollSettings() {
     if (!state.isHost) return;
-    let visibility = document.getElementById('result-visibility-select').value;
-    let deadline = document.getElementById('poll-deadline-input').value || null;
-    
-    let poll = state.polls.find(p => p.id === state.activePollId);
-    if (poll) { poll.result_visibility = visibility; poll.deadline = deadline; }
-
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('polls').update({ result_visibility: visibility, deadline: deadline }).eq('id', state.activePollId);
-        } catch (e) { console.error(e); }
-    }
+    clearMessage();
+    const deadlineInput = el('poll-deadline-input').value;
+    const parsed = deadlineInput ? new Date(deadlineInput) : null;
+    if (parsed && Number.isNaN(parsed.valueOf())) { message('Invalid deadline date.'); return; }
+    try {
+        assertOK(await db.from('pt_polls').update({
+            result_visibility: el('result-visibility-select').value,
+            deadline: parsed ? parsed.toISOString() : null
+        }).eq('id', state.activePollId).select('id').single(), 'Updating poll settings');
+        await refreshRoom();
+    } catch (err) { friendlyError(err); await refreshRoom().catch(friendlyError); }
 }
-
 async function closeCurrentPoll() {
     if (!state.isHost) return;
-    let poll = state.polls.find(p => p.id === state.activePollId);
-    if (poll) poll.status = 'closed';
-
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('polls').update({ status: 'closed' }).eq('id', state.activePollId);
-            fetchActivePollDetails();
-        } catch (e) { console.error(e); }
-    } else {
-        renderOptionsAndResults(poll);
-        document.getElementById('poll-title-heading').innerHTML = `${poll.title} <span class="badge closed">CLOSED</span>`;
-    }
+    clearMessage();
+    try {
+        assertOK(await db.from('pt_polls').update({status:'closed'}).eq('id', state.activePollId).select('id').single(), 'Closing poll');
+        await refreshRoom();
+    } catch (err) { friendlyError(err); }
+}
+async function kickUser(userId) {
+    if (!state.isHost || userId === state.userId) return;
+    clearMessage();
+    try {
+        assertOK(await db.rpc('pt_kick_user', {
+            p_room_key: state.roomKey, p_user_id: userId
+        }), 'Removing member');
+        await refreshRoom();
+    } catch (err) { friendlyError(err); }
+}
+async function copyInviteLink() {
+    const url = new URL(location.href);
+    url.searchParams.set('room', state.roomKey);
+    try {
+        await navigator.clipboard.writeText(url.toString());
+        alert('Invite link copied!');
+    } catch (err) { friendlyError(new Error('Could not copy automatically. Your invite link is: ' + url)); }
+}
+function goHome(clearSaved = true) {
+    clearSubscriptions();
+    state = freshState();
+    el('room-view').classList.remove('active');
+    el('home-view').classList.add('active');
+    el('room-key-display').style.display = 'none';
+    if (clearSaved) localStorage.removeItem(SESSION_KEY);
+    const url = new URL(location.href);
+    url.searchParams.delete('room');
+    history.replaceState({}, '', url);
 }
 
-async function kickUser(name) {
-    if (!state.isHost) return;
-    if (supabaseClient) {
-        try {
-            await supabaseClient.from('participants').delete().eq('room_key', state.roomKey).eq('name', name);
-            fetchRoomData();
-        } catch (e) { console.error(e); }
-    } else {
-        state.participants = state.participants.filter(p => p.name !== name);
-        renderMembers();
-    }
-}
-
-function copyInviteLink() {
-    let link = `${window.location.origin}${window.location.pathname}?room=${state.roomKey}`;
-    navigator.clipboard.writeText(link);
-    alert("Invite link copied to clipboard!");
-}
-
-function goHome() {
-    if (supabaseClient) {
-        state.subscriptions.forEach(sub => supabaseClient.removeChannel(sub));
-    }
-    state = { roomKey: null, username: null, isHost: false, participants: [], polls: [], activePollId: null, options: [], votes: [], subscriptions: [] };
-    
-    document.getElementById('room-view').classList.remove('active');
-    document.getElementById('home-view').classList.add('active');
-    document.getElementById('room-key-display').style.display = 'none';
-    window.history.replaceState({}, document.title, window.location.pathname);
-}
-// used for error messages
-setInterval(() => {
-document.getElementById("message").textContent = 
-  JSON.stringify(state, null, 2);
-}, 100);
+window.addEventListener('click', e => {
+    if (!e.target.closest('.nav-item')) closeAllDropdowns();
+});
+window.addEventListener('DOMContentLoaded', async () => {
+    const fromUrl = new URLSearchParams(location.search).get('room');
+    const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    const key = fromUrl || saved?.key;
+    if (!key) return;
+    if (!/^\d{6}$/.test(key)) { message('This invite link contains an invalid room code.'); return; }
+    const name = saved?.key === key && saved?.name ? saved.name
+        : await showCustomPrompt('Join Room', `Enter your display name to join room ${key}:`, 'Participant');
+    if (name) await joinRoom(key, name);
+});
