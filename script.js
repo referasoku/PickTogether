@@ -3,7 +3,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 let supabaseClient = null;
 try {
-    if (SUPABASE_URL && SUPABASE_URL !== 'YOUR_SUPABASE_URL' && window.supabase) {
+    if (SUPABASE_URL && SUPABASE_URL !== 'https://mkxbpxehgzcrimjyuomu.supabase.co' && window.supabase) {
         supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     }
 } catch (err) {
