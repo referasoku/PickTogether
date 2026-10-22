@@ -14,6 +14,7 @@ let refreshTimer = null;
 let pollTimer = null;
 
 
+
 function freshState() {
     return { roomKey: null, userId: null, username: null, isHost: false,
         participants: [], polls: [], activePollId: null, options: [], myVote: null,
