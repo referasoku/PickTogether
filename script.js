@@ -300,14 +300,25 @@ async function addOption() {
     let val = input.value.trim();
     if (!val) return;
 
+    let newOptId = Date.now();
+    if (!state.optionsMap[state.activePollId]) state.optionsMap[state.activePollId] = [];
+    state.optionsMap[state.activePollId].push({ id: newOptId, poll_id: state.activePollId, text: val, added_by: state.username });
+
     if (supabaseClient) {
         try {
-            await supabaseClient.from('options').insert([{ poll_id: state.activePollId, text: val, addedBy: state.username }]);
-            fetchActivePollDetails();
-        } catch (e) { console.error(e); }
+            // Note: changed addedBy to added_by to match the SQL table column name
+            const { error } = await supabaseClient
+                .from('options')
+                .insert([{ poll_id: state.activePollId, text: val, added_by: state.username }]);
+                
+            if (error) {
+                console.error("Error inserting option:", error.message);
+            } else {
+                await fetchRoomData();
+            }
+        } catch(e) { console.error(e); }
     } else {
-        state.options.push({ id: Date.now(), poll_id: state.activePollId, text: val, addedBy: state.username });
-        renderOptionsAndResults(state.polls.find(p => p.id === state.activePollId));
+        renderActivePoll();
     }
     input.value = '';
 }
