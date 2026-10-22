@@ -17,8 +17,8 @@ let state = {
     participants: [],
     polls: [],
     activePollId: null,
-    options: [],
-    votes: [],
+    options: {},
+    votes: {},
     subscriptions: []
 };
 
@@ -300,13 +300,22 @@ async function addOption() {
     let val = input.value.trim();
     if (!val) return;
 
+    // Safety check: ensure optionsMap and votesMap always exist
+    if (!state.optionsMap) state.optionsMap = {};
+    if (!state.optionsMap[state.activePollId]) {
+        state.optionsMap[state.activePollId] = [];
+    }
+
     let newOptId = Date.now();
-    if (!state.optionsMap[state.activePollId]) state.optionsMap[state.activePollId] = [];
-    state.optionsMap[state.activePollId].push({ id: newOptId, poll_id: state.activePollId, text: val, added_by: state.username });
+    state.optionsMap[state.activePollId].push({ 
+        id: newOptId, 
+        poll_id: state.activePollId, 
+        text: val, 
+        added_by: state.username 
+    });
 
     if (supabaseClient) {
         try {
-            // Note: changed addedBy to added_by to match the SQL table column name
             const { error } = await supabaseClient
                 .from('options')
                 .insert([{ poll_id: state.activePollId, text: val, added_by: state.username }]);
@@ -316,10 +325,13 @@ async function addOption() {
             } else {
                 await fetchRoomData();
             }
-        } catch(e) { console.error(e); }
+        } catch(e) { 
+            console.error("Supabase exception:", e); 
+        }
     } else {
         renderActivePoll();
     }
+    
     input.value = '';
 }
 
