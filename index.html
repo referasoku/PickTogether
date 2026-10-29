@@ -97,15 +97,9 @@
                     <option value="hidden">Hide until closed</option>
                   </select>
                 </div>
-                <div class="setting-group" id="timer">
-                  <div>
-                    <label for="timer-hours">Hours</label>
-                    <input id="timer-hours" type="number" min="0" max="99" value="0">
-                  </div>
-                  <div>
-                    <label for="timer-minutes">Minutes</label>
-                    <input id="timer-minutes" type="number" min="0" max="59" placeholder="00" value="0">
-                  </div>
+                <div class="setting-group">
+                  <label for="poll-deadline-input">Deadline (optional, local time)</label>
+                  <input type="datetime-local" id="poll-deadline-input">
                 </div>
               </div>
               <div class="settings-actions">
