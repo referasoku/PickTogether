@@ -33,7 +33,7 @@ body {
 .navbar {
   background-color: var(--card-bg);
   color: var(--light-text);
-  padding: 0 2rem;
+  padding: 0 0 0 2rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
