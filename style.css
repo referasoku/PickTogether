@@ -116,7 +116,7 @@ body {
   top: 70px; /* matches navbar height */
   right: 0;
   background-color: var(--card-bg);
-  min-width: 200px;
+  width: inherit;
   border: 1px solid var(--border-color);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
   border-radius: 0 0 6px 6px;
@@ -137,7 +137,7 @@ body {
 /* Dropdown Items */
 .dropdown-item {
   color: var(--light-text);
-  padding: 12px 18px;
+  padding: 12px 11px;
   text-decoration: none;
   display: flex;
   align-items: center;
