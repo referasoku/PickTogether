@@ -501,6 +501,7 @@ body {
 }
 .nav-right {
   display: flex;
+  height: 100%;
   align-items: center;
   gap: 12px;
 }
