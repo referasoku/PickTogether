@@ -112,9 +112,9 @@ body {
 
 /* Dropdown Menu Box */
 .dropdown-menu {
-  position: absolute;
+  position: fixed;
   top: 70px; /* matches navbar height */
-  left: 0;
+  right: 0;
   background-color: var(--card-bg);
   min-width: 200px;
   border: 1px solid var(--border-color);
@@ -662,11 +662,6 @@ select:focus-visible {
   }
   .nav-right {
     margin-left: auto;
-  }
-  .dropdown-menu {
-    top: 100%;
-    right: 0;
-    left: auto;
   }
   .main-container {
     padding: 15px;
